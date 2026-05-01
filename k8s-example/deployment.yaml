@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: radio-bridge
+  labels:
+    app: radio-bridge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: radio-bridge
+  template:
+    metadata:
+      labels:
+        app: radio-bridge
+    spec:
+      containers:
+        - name: radio-bridge
+          image: your-registry/radio-bridge:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: HDHR_HOST
+              value: "YOUR_HDHOMERUN_IP"
+            - name: HDHR_PORT
+              value: "5004"
+            - name: BITRATE
+              value: "256k"
+            - name: GRACE_PERIOD
+              value: "30"
+            - name: EXTERNAL_HOST
+              value: "YOUR_SERVER_IP:8000"
+            - name: SONOS_SUBNETS
+              value: "YOUR_SONOS_SUBNET"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /status.json
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /status.json
+              port: 8000
+            initialDelaySeconds: 2
+            periodSeconds: 10

@@ -1,0 +1,19 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: radio-bridge
+  labels:
+    app: radio-bridge
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: radio.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: radio-bridge
+                port:
+                  number: 8000
