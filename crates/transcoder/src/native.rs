@@ -138,6 +138,10 @@ async fn run(
                         }
 
                         let pcm = extract_interleaved_i16(&decoded);
+                        if pcm_buf.len() + pcm.len() > MAX_PCM_BUFFER {
+                            tracing::warn!("PCM buffer overflow, dropping");
+                            pcm_buf.clear();
+                        }
                         pcm_buf.extend_from_slice(&pcm);
 
                         let aac_frame_samples = 1024 * 2; // 1024 per channel, stereo interleaved
@@ -216,6 +220,9 @@ fn extract_interleaved_i16(buf: &GenericAudioBufferRef) -> Vec<i16> {
     }
 }
 
+const MAX_PES_SIZE: usize = 256 * 1024;
+const MAX_PCM_BUFFER: usize = 96000;
+
 struct PesAssembler {
     buf: Vec<u8>,
     collecting: bool,
@@ -273,6 +280,13 @@ impl PesAssembler {
 
         if self.collecting {
             self.buf.extend_from_slice(payload);
+
+            if self.buf.len() > MAX_PES_SIZE {
+                tracing::warn!("PES buffer exceeded max size, dropping");
+                self.buf.clear();
+                self.collecting = false;
+                return None;
+            }
 
             if self.expected_len > 0 && self.buf.len() >= self.expected_len {
                 self.collecting = false;
