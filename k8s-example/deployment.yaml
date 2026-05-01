@@ -14,6 +14,7 @@ spec:
       labels:
         app: radio-bridge
     spec:
+      hostNetwork: true  # Required for mDNS multicast to discover Sonos speakers
       containers:
         - name: radio-bridge
           image: your-registry/radio-bridge:latest
@@ -30,8 +31,6 @@ spec:
               value: "30"
             - name: EXTERNAL_HOST
               value: "YOUR_SERVER_IP:8000"
-            - name: SONOS_SUBNETS
-              value: "YOUR_SONOS_SUBNET"
           resources:
             requests:
               cpu: 100m

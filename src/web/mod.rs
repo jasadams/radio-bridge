@@ -18,8 +18,8 @@ pub struct AppState {
     pub grace_period: u64,
     pub external_host: String,
     pub lineup_cache: RwLock<Option<(serde_json::Value, Instant)>>,
+    pub speaker_cache: RwLock<Option<(Vec<crate::sonos::Speaker>, Instant)>>,
     pub provider: Arc<dyn crate::providers::MetadataProvider>,
-    pub sonos_subnets: Vec<String>,
 }
 
 pub struct PipelineSession {
@@ -191,7 +191,18 @@ async fn api_stations(State(state): State<Arc<AppState>>) -> Json<serde_json::Va
 
 
 async fn api_speakers(State(state): State<Arc<AppState>>) -> Json<Vec<crate::sonos::Speaker>> {
-    Json(crate::sonos::discover(&state.sonos_subnets).await)
+    // Cache speakers for 5 minutes to avoid waking devices with port scans
+    {
+        let cache = state.speaker_cache.read().await;
+        if let Some((speakers, cached_at)) = cache.as_ref()
+            && cached_at.elapsed() < std::time::Duration::from_secs(300) {
+                return Json(speakers.clone());
+            }
+    }
+
+    let speakers = crate::sonos::discover().await;
+    *state.speaker_cache.write().await = Some((speakers.clone(), Instant::now()));
+    Json(speakers)
 }
 
 #[derive(serde::Deserialize)]

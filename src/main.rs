@@ -32,8 +32,6 @@ struct Args {
     #[arg(long, env = "EXTERNAL_HOST")]
     external_host: Option<String>,
 
-    #[arg(long, env = "SONOS_SUBNETS")]
-    sonos_subnets: Option<String>,
 }
 
 #[tokio::main]
@@ -47,21 +45,13 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
-    let sonos_subnets = match args.sonos_subnets {
-        Some(ref s) => s.split(',').map(|s| s.trim().to_string()).collect(),
-        None => {
-            tracing::info!("Auto-detecting network subnets...");
-            let subnets = discovery::detect_subnets();
-            tracing::info!("Found subnets: {}", subnets.join(", "));
-            subnets
-        }
-    };
+    let subnets = discovery::detect_subnets();
 
     let hdhr_host = match args.hdhr_host {
         Some(ref h) => h.clone(),
         None => {
             tracing::info!("Auto-discovering HDHomeRun...");
-            match discovery::find_hdhomerun(&sonos_subnets) {
+            match discovery::find_hdhomerun(&subnets) {
                 Some(ip) => {
                     tracing::info!("Found HDHomeRun at {ip}");
                     ip
@@ -88,8 +78,8 @@ async fn main() -> anyhow::Result<()> {
         grace_period: args.grace_period,
         external_host: external_host.clone(),
         lineup_cache: RwLock::new(None),
+        speaker_cache: RwLock::new(None),
         provider,
-        sonos_subnets,
     });
 
     let monitor_state = state.clone();

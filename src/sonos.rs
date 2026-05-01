@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::net::TcpStream;
+use std::collections::HashMap;
 use std::time::Duration;
 
 #[derive(Clone, serde::Serialize)]
@@ -9,65 +9,78 @@ pub struct Speaker {
     pub model: String,
 }
 
-pub async fn discover(subnets: &[String]) -> Vec<Speaker> {
-    let mut ips = Vec::new();
-    for subnet in subnets {
-        let prefix = subnet.rsplit_once('.').map(|(p, _)| p).unwrap_or(subnet);
-        for i in 1..255 {
-            ips.push(format!("{prefix}.{i}"));
+pub async fn discover() -> Vec<Speaker> {
+    use futures_util::StreamExt;
+
+    let discovery = match mdns::discover::all("_sonos._tcp.local", Duration::from_secs(2)) {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!("mDNS discovery failed: {e}");
+            return Vec::new();
+        }
+    };
+
+    let mut stream = std::pin::pin!(discovery.listen());
+    let mut ips: HashMap<String, ()> = HashMap::new();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+
+        match tokio::time::timeout(remaining, stream.next()).await {
+            Ok(Some(Ok(response))) => {
+                for record in response.records() {
+                    if let mdns::RecordKind::A(addr) = &record.kind {
+                        ips.insert(addr.to_string(), ());
+                    }
+                }
+            }
+            _ => break,
         }
     }
-
-    let handles: Vec<_> = ips
-        .into_iter()
-        .map(|ip| {
-            tokio::task::spawn_blocking(move || {
-                if TcpStream::connect_timeout(
-                    &format!("{ip}:1400").parse().ok()?,
-                    Duration::from_millis(400),
-                )
-                .is_ok()
-                {
-                    get_speaker_info(&ip).ok()
-                } else {
-                    None
-                }
-            })
-        })
-        .collect();
 
     let mut speakers = Vec::new();
-    for handle in handles {
-        if let Ok(Some(speaker)) = handle.await {
-            speakers.push(speaker);
+    for ip in ips.keys() {
+        let speaker = tokio::task::spawn_blocking({
+            let ip = ip.clone();
+            move || get_speaker_info(&ip)
+        })
+        .await
+        .ok()
+        .flatten();
+
+        if let Some(s) = speaker {
+            tracing::info!(ip = %s.ip, name = %s.name, model = %s.model, "Found Sonos speaker");
+            speakers.push(s);
         }
     }
+
+    if speakers.is_empty() {
+        tracing::warn!("No Sonos speakers found via mDNS");
+    }
+
     speakers
 }
 
-fn get_speaker_info(ip: &str) -> Result<Speaker> {
+fn get_speaker_info(ip: &str) -> Option<Speaker> {
     let url = format!("http://{ip}:1400/xml/device_description.xml");
     let agent = ureq::Agent::new_with_config(
-        ureq::config::Config::builder().timeout_global(Some(Duration::from_secs(2))).build()
+        ureq::config::Config::builder()
+            .timeout_global(Some(Duration::from_secs(2)))
+            .build(),
     );
-    let body = agent.get(&url).call()?.body_mut().read_to_string()?;
-
-    let room = extract_xml_value(&body, "roomName").unwrap_or_default();
+    let body = agent.get(&url).call().ok()?.body_mut().read_to_string().ok()?;
+    let name = extract_xml_value(&body, "roomName")?;
     let model = extract_xml_value(&body, "modelName").unwrap_or_default();
-
-    if room.is_empty() {
-        anyhow::bail!("No room name");
-    }
-
-    Ok(Speaker {
-        ip: ip.to_string(),
-        name: room,
-        model,
-    })
+    Some(Speaker { ip: ip.to_string(), name, model })
 }
 
 pub async fn play(speaker_ip: &str, stream_url: &str, title: &str, art_url: Option<&str>) -> Result<()> {
-    let radio_url = stream_url.replace("http://", "x-rincon-mp3radio://")
+    let radio_url = stream_url
+        .replace("http://", "x-rincon-mp3radio://")
         .replace("https://", "x-rincon-mp3radio://");
 
     let art_xml = art_url
@@ -111,9 +124,12 @@ async fn soap_action(speaker_ip: &str, action: &str, body: &str) -> Result<()> {
 
     tokio::task::spawn_blocking(move || {
         let agent = ureq::Agent::new_with_config(
-            ureq::config::Config::builder().timeout_global(Some(Duration::from_secs(10))).build()
+            ureq::config::Config::builder()
+                .timeout_global(Some(Duration::from_secs(10)))
+                .build(),
         );
-        agent.post(&url)
+        agent
+            .post(&url)
             .header("Content-Type", r#"text/xml; charset="utf-8""#)
             .header("SOAPAction", &soap_action_header)
             .send(soap.as_bytes())?;

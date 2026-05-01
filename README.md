@@ -50,7 +50,6 @@ cargo build --release
 
 ./target/release/radio-bridge \
   --hdhr-host 192.168.1.100 \
-  --sonos-subnets 192.168.1.0
 ```
 
 ### Docker
@@ -59,7 +58,6 @@ cargo build --release
 docker build -t radio-bridge .
 docker run -d \
   -e HDHR_HOST=192.168.1.100 \
-  -e SONOS_SUBNETS=192.168.1.0 \
   -p 8000:8000 \
   radio-bridge
 ```
@@ -86,7 +84,6 @@ All settings are available as CLI flags or environment variables:
 | `--port` | `PORT` | `8000` | HTTP server port |
 | `--grace-period` | `GRACE_PERIOD` | `30` | Seconds to keep pipeline alive after last listener |
 | `--external-host` | `EXTERNAL_HOST` | `localhost:PORT` | Hostname for HLS segment URLs |
-| `--sonos-subnets` | `SONOS_SUBNETS` | *(required)* | Comma-separated subnets to scan for Sonos speakers |
 
 ## Finding Your HDHomeRun
 
@@ -106,10 +103,9 @@ Radio channels appear with no `VideoCodec` field in the lineup. The channel numb
 
 ### Sonos Speaker Discovery
 
-Radio Bridge discovers Sonos speakers by scanning for TCP port 1400 on the configured subnets. If your Sonos speakers are on a different VLAN/subnet from the server, you need to:
+Radio Bridge discovers Sonos speakers via mDNS (multicast DNS), the same protocol Sonos uses natively. If your speakers are on a different VLAN, you need to:
 
-1. Ensure routing exists between the subnets
-2. Add all relevant subnets to `--sonos-subnets` (e.g. `192.168.1.0,192.168.4.0`)
+1. Enable mDNS reflection on your router (UniFi: Settings > Services > MDNS)
 
 ### EXTERNAL_HOST
 
@@ -146,7 +142,7 @@ Each HLS segment is a self-contained MPEG-TS file generated entirely in memory:
 
 The metadata stream is declared as `stream_type 0x15` (timed metadata) with a registration descriptor containing `"ID3 "`. This is the Apple HLS standard for timed metadata and is supported by Sonos.
 
-Segments are 2 seconds long. The server waits for 2 segments before serving the playlist, giving Sonos a 4-second buffer to start with. 30 segments (60 seconds) are kept in a ring buffer.
+Segments are 4 seconds long. The server waits for 3 segments before serving the playlist, giving Sonos a 12-second buffer to start with. 30 segments (60 seconds) are kept in a ring buffer.
 
 ## Audio Pipeline
 
@@ -171,7 +167,7 @@ HDHomeRun DVB-T stream
       │
       ▼
   In-memory MPEG-TS mux + ID3v2.4 injection
-  2-second HLS segments → ring buffer → HTTP
+  4-second HLS segments → ring buffer → HTTP
 ```
 
 The sample rate is auto-detected from the first decoded frame, not hardcoded. The PCM buffer is necessary because MP2 and AAC have different frame sizes — without it, 128 samples per channel are lost every frame, causing audible artifacts.
@@ -266,7 +262,6 @@ Sonos supports HLS with AAC-LC in MPEG-TS containers. It does NOT support MP3 in
 
 ### Multiple Subnets
 
-If your Sonos speakers and server are on different VLANs, both subnets need to be in `SONOS_SUBNETS` and routing must exist between them. The Sonos speakers also need to reach the `EXTERNAL_HOST` to fetch HLS segments.
 
 ## License
 
