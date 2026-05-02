@@ -24,6 +24,7 @@ impl HlsPipeline {
         hdhr_port: &str,
         bitrate: &str,
         fallback_art_url: Option<String>,
+        segment_duration: f64,
     ) -> Result<Self> {
         let input_url = format!("http://{hdhr_host}:{hdhr_port}/auto/v{channel}");
         let bitrate_num: u32 = bitrate
@@ -37,7 +38,7 @@ impl HlsPipeline {
         let config = transcoder::TranscoderConfig {
             input_url,
             bitrate: bitrate_num,
-            sample_rate: 44100,
+            sample_rate: 0,
             channels: 2,
         };
 
@@ -57,7 +58,7 @@ impl HlsPipeline {
         let ch = channel.to_string();
 
         let mux_task = tokio::spawn(async move {
-            let mut muxer = TsMuxer::new(4.0);
+            let mut muxer = TsMuxer::new(segment_duration);
 
             loop {
                 tokio::select! {

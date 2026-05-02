@@ -18,6 +18,7 @@ pub struct TsMuxer {
     pmt_cc: u8,
     id3_bytes: Vec<u8>,
     started: bool,
+    sample_rate: u32,
 }
 
 pub struct CompletedSegment {
@@ -38,6 +39,7 @@ impl TsMuxer {
             pmt_cc: 0,
             id3_bytes: Vec::new(),
             started: false,
+            sample_rate: 0,
         }
     }
 
@@ -46,6 +48,7 @@ impl TsMuxer {
     }
 
     pub fn push_frame(&mut self, frame: AacFrame) -> Option<CompletedSegment> {
+        self.sample_rate = frame.sample_rate;
         if !self.started {
             self.begin_segment(frame.pts);
             self.started = true;
@@ -85,7 +88,7 @@ impl TsMuxer {
     }
 
     fn finish_segment(&mut self) -> CompletedSegment {
-        let duration = (self.segment_frame_count as f64 * 1024.0) / 44100.0;
+        let duration = (self.segment_frame_count as f64 * 1024.0) / self.sample_rate as f64;
         CompletedSegment {
             data: Bytes::from(std::mem::take(&mut self.current_segment)),
             duration,

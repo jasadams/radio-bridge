@@ -43,15 +43,15 @@ impl SegmentStore {
             .map(|s| &s.data)
     }
 
-    pub fn generate_playlist(&self, base_url: &str, channel: &str) -> String {
-        if self.segments.len() < 3 {
+    pub fn generate_playlist(&self, base_url: &str, channel: &str, min_segments: usize) -> String {
+        if self.segments.len() < min_segments {
             return String::new();
         }
 
         let target_duration = self
             .segments
             .iter()
-            .map(|s| s.duration.ceil() as u64)
+            .map(|s| s.duration.floor() as u64)
             .max()
             .unwrap_or(10);
 

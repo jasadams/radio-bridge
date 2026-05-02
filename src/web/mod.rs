@@ -18,8 +18,10 @@ pub struct AppState {
     pub grace_period: u64,
     pub external_host: String,
     pub lineup_cache: RwLock<Option<(serde_json::Value, Instant)>>,
-    pub speaker_cache: RwLock<Option<(Vec<crate::sonos::Speaker>, Instant)>>,
     pub provider: Arc<dyn crate::providers::MetadataProvider>,
+    pub sonos_subnets: Vec<String>,
+    pub segment_duration: f64,
+    pub min_segments: usize,
 }
 
 pub struct PipelineSession {
@@ -40,11 +42,33 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/api/play", post(api_play))
         .route("/manifest.json", get(serve_manifest))
         .route("/status.json", get(api_status))
+        .route("/test/{channel}", get(test_player))
         .with_state(state)
 }
 
 async fn index() -> Html<&'static str> {
     Html(include_str!("pwa.html"))
+}
+
+async fn test_player(
+    State(state): State<Arc<AppState>>,
+    Path(channel): Path<String>,
+) -> Html<String> {
+    let stream_url = format!("/hls/{channel}/live.m3u8");
+    Html(format!(r#"<!DOCTYPE html>
+<html><head><script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script></head>
+<body style="background:#1a1a2e;color:white;font-family:sans-serif;text-align:center;padding:40px">
+<h2>Stream Test — Channel {channel}</h2>
+<audio id="a" controls autoplay style="width:80%"></audio>
+<p id="s">Loading...</p>
+<script>
+var a=document.getElementById('a'),s=document.getElementById('s');
+if(Hls.isSupported()){{var h=new Hls();h.loadSource('{stream_url}');h.attachMedia(a);
+h.on(Hls.Events.MANIFEST_PARSED,function(){{s.textContent='Playing';a.play()}});
+h.on(Hls.Events.ERROR,function(e,d){{s.textContent='Error: '+d.type+' '+d.details}})}}
+else if(a.canPlayType('application/vnd.apple.mpegurl')){{a.src='{stream_url}';s.textContent='Native HLS'}}
+else{{s.textContent='HLS not supported'}}
+</script></body></html>"#))
 }
 
 async fn serve_playlist(
@@ -66,12 +90,12 @@ async fn serve_playlist(
             let sess = session_guard.read().await;
             let store = sess.pipeline.segment_store.read().await;
             let count = store.count();
-            if count >= 3 {
+            if count >= state.min_segments {
                 let first = store.first_seq();
                 let last = store.last_seq();
                 let scheme = if state.external_host.contains(':') { "http" } else { "https" };
                 let base_url = format!("{scheme}://{}", state.external_host);
-                let playlist = store.generate_playlist(&base_url, &channel);
+                let playlist = store.generate_playlist(&base_url, &channel, state.min_segments);
                 tracing::debug!(channel, count, first, last, "Serving playlist");
                 let mut headers = HeaderMap::new();
                 headers.insert(header::CONTENT_TYPE, "application/vnd.apple.mpegurl".parse().expect("valid header"));
@@ -191,18 +215,7 @@ async fn api_stations(State(state): State<Arc<AppState>>) -> Json<serde_json::Va
 
 
 async fn api_speakers(State(state): State<Arc<AppState>>) -> Json<Vec<crate::sonos::Speaker>> {
-    // Cache speakers for 5 minutes to avoid waking devices with port scans
-    {
-        let cache = state.speaker_cache.read().await;
-        if let Some((speakers, cached_at)) = cache.as_ref()
-            && cached_at.elapsed() < std::time::Duration::from_secs(300) {
-                return Json(speakers.clone());
-            }
-    }
-
-    let speakers = crate::sonos::discover().await;
-    *state.speaker_cache.write().await = Some((speakers.clone(), Instant::now()));
-    Json(speakers)
+    Json(crate::sonos::discover(&state.sonos_subnets).await)
 }
 
 #[derive(serde::Deserialize)]
@@ -316,6 +329,7 @@ async fn get_or_create_pipeline(
         &state.hdhr_port,
         &state.bitrate,
         fallback_art,
+        state.segment_duration,
     )
     .await?;
 
