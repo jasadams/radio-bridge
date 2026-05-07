@@ -46,7 +46,7 @@ impl HlsPipeline {
 
         let segment_store = Arc::new(RwLock::new(SegmentStore::new(30)));
         let last_access = Arc::new(RwLock::new(Instant::now()));
-        let artwork_url: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(fallback_art_url));
+        let artwork_url: Arc<RwLock<Option<String>>> = Arc::new(RwLock::new(fallback_art_url.clone()));
         let track_info: Arc<RwLock<(String, String)>> =
             Arc::new(RwLock::new((String::new(), String::new())));
 

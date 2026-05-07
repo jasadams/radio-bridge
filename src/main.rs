@@ -1,7 +1,6 @@
 mod discovery;
 mod hls;
 mod providers;
-mod sonos;
 mod web;
 
 use clap::Parser;
@@ -12,7 +11,7 @@ use tokio::sync::RwLock;
 use tokio::time::Duration;
 
 #[derive(Parser)]
-#[command(name = "radio-bridge", about = "HDHomeRun to Sonos HLS radio bridge")]
+#[command(name = "radio-bridge", about = "HDHomeRun to HLS radio bridge")]
 struct Args {
     #[arg(long, env = "HDHR_HOST")]
     hdhr_host: Option<String>,
@@ -32,9 +31,6 @@ struct Args {
     #[arg(long, env = "EXTERNAL_HOST")]
     external_host: Option<String>,
 
-    #[arg(long, env = "SONOS_SUBNETS")]
-    sonos_subnets: Option<String>,
-
     #[arg(long, default_value = "2.0", env = "SEGMENT_DURATION")]
     segment_duration: f64,
 
@@ -53,21 +49,13 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Args::parse();
 
-    let sonos_subnets = match args.sonos_subnets {
-        Some(ref s) => s.split(',').map(|s| s.trim().to_string()).collect(),
-        None => {
-            tracing::info!("Auto-detecting network subnets...");
-            let subnets = discovery::detect_subnets();
-            tracing::info!("Found subnets: {}", subnets.join(", "));
-            subnets
-        }
-    };
-
     let hdhr_host = match args.hdhr_host {
         Some(ref h) => h.clone(),
         None => {
             tracing::info!("Auto-discovering HDHomeRun...");
-            match discovery::find_hdhomerun(&sonos_subnets) {
+            let subnets = discovery::detect_subnets();
+            tracing::info!("Scanning subnets: {}", subnets.join(", "));
+            match discovery::find_hdhomerun(&subnets) {
                 Some(ip) => {
                     tracing::info!("Found HDHomeRun at {ip}");
                     ip
@@ -95,7 +83,6 @@ async fn main() -> anyhow::Result<()> {
         external_host: external_host.clone(),
         lineup_cache: RwLock::new(None),
         provider,
-        sonos_subnets,
         segment_duration: args.segment_duration,
         min_segments: args.min_segments,
     });

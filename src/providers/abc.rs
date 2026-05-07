@@ -57,10 +57,11 @@ impl MetadataProvider for AbcProvider {
         station_id: &str,
         artwork_target: Arc<RwLock<Option<String>>>,
         track_target: Arc<RwLock<(String, String)>>,
+        fallback_art_url: Option<String>,
     ) -> tokio::task::JoinHandle<()> {
         let station_id = station_id.to_string();
         tokio::spawn(async move {
-            run_poller(station_id, artwork_target, track_target).await;
+            run_poller(station_id, artwork_target, track_target, fallback_art_url).await;
         })
     }
 }
@@ -69,6 +70,7 @@ async fn run_poller(
     station_id: String,
     artwork_target: Arc<RwLock<Option<String>>>,
     track_target: Arc<RwLock<(String, String)>>,
+    fallback_art_url: Option<String>,
 ) {
     tracing::info!(station = %station_id, "ABC now-playing poller running");
     let client = reqwest::Client::builder()
@@ -99,14 +101,14 @@ async fn run_poller(
                     if last_title != prog {
                         tracing::info!(station = %station_id, program = %prog, "Showing program");
                         last_title = prog.clone();
-                        *artwork_target.write().await = None;
+                        *artwork_target.write().await = fallback_art_url.clone();
                         *track_target.write().await = (prog, String::new());
                     }
                 }
                 _ => {
                     if !last_title.is_empty() {
                         last_title.clear();
-                        *artwork_target.write().await = None;
+                        *artwork_target.write().await = fallback_art_url.clone();
                         *track_target.write().await = (String::new(), String::new());
                     }
                 }

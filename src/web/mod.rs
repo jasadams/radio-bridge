@@ -1,7 +1,7 @@
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::get;
 use axum::{Json, Router};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -19,7 +19,6 @@ pub struct AppState {
     pub external_host: String,
     pub lineup_cache: RwLock<Option<(serde_json::Value, Instant)>>,
     pub provider: Arc<dyn crate::providers::MetadataProvider>,
-    pub sonos_subnets: Vec<String>,
     pub segment_duration: f64,
     pub min_segments: usize,
 }
@@ -31,27 +30,18 @@ pub struct PipelineSession {
 
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
-        .route("/", get(index))
         .route("/hls/{channel}/live.m3u8", get(serve_playlist))
         .route("/hls/{channel}/seg/{*rest}", get(serve_segment))
         .route("/art/{channel}", get(serve_art))
         .route("/logo/{channel}", get(serve_logo))
-        .route("/app-icon.svg", get(serve_app_icon))
         .route("/api/stations", get(api_stations))
-        .route("/api/speakers", get(api_speakers))
-        .route("/api/play", post(api_play))
-        .route("/manifest.json", get(serve_manifest))
         .route("/status.json", get(api_status))
         .route("/test/{channel}", get(test_player))
         .with_state(state)
 }
 
-async fn index() -> Html<&'static str> {
-    Html(include_str!("pwa.html"))
-}
-
 async fn test_player(
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
     Path(channel): Path<String>,
 ) -> Html<String> {
     let stream_url = format!("/hls/{channel}/live.m3u8");
@@ -190,13 +180,6 @@ async fn serve_logo(
     StatusCode::NOT_FOUND.into_response()
 }
 
-async fn serve_app_icon() -> Response {
-    let mut headers = HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, "image/svg+xml".parse().expect("valid header"));
-    headers.insert(header::CACHE_CONTROL, "public, max-age=86400".parse().expect("valid header"));
-    (headers, include_str!("app_icon.svg")).into_response()
-}
-
 async fn resolve_logo(state: &AppState, channel: &str) -> Option<Vec<u8>> {
     let lineup = fetch_lineup(state).await;
     let guide_name = lineup
@@ -213,63 +196,6 @@ async fn api_stations(State(state): State<Arc<AppState>>) -> Json<serde_json::Va
     Json(fetch_lineup(&state).await)
 }
 
-
-async fn api_speakers(State(state): State<Arc<AppState>>) -> Json<Vec<crate::sonos::Speaker>> {
-    Json(crate::sonos::discover(&state.sonos_subnets).await)
-}
-
-#[derive(serde::Deserialize)]
-struct PlayRequest {
-    speaker: String,
-    channel: String,
-}
-
-async fn api_play(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<PlayRequest>,
-) -> Response {
-    let lineup = fetch_lineup(&state).await;
-    let guide_name = lineup
-        .as_array()
-        .and_then(|chs| chs.iter().find(|c| c.get("GuideNumber").and_then(|v| v.as_str()) == Some(&req.channel)))
-        .and_then(|c| c.get("GuideName").and_then(|v| v.as_str()))
-        .unwrap_or("Radio");
-
-    // Ensure pipeline is running before telling Sonos to play
-    if let Err(e) = get_or_create_pipeline(&state, &req.channel).await {
-        tracing::error!(error = %e, "Failed to create pipeline");
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"status": "error", "error": e.to_string()}))).into_response();
-    }
-
-    let scheme = if state.external_host.contains(':') { "http" } else { "https" };
-    let stream_url = format!("{scheme}://{}/hls/{}/live.m3u8", state.external_host, req.channel);
-    let art_url = format!("{scheme}://{}/logo/{}", state.external_host, req.channel);
-
-    match crate::sonos::play(&req.speaker, &stream_url, guide_name, Some(&art_url)).await {
-        Ok(()) => Json(serde_json::json!({"status": "ok", "title": guide_name})).into_response(),
-        Err(e) => {
-            tracing::error!(error = %e, "Play failed");
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"status": "error", "error": e.to_string()}))).into_response()
-        }
-    }
-}
-
-async fn serve_manifest() -> Response {
-    let manifest = serde_json::json!({
-        "name": "Radio Bridge",
-        "short_name": "Radio",
-        "start_url": "/",
-        "display": "standalone",
-        "background_color": "#1a1a2e",
-        "theme_color": "#1a1a2e",
-        "icons": [
-            {"src": "/app-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}
-        ]
-    });
-    let mut headers = HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, "application/manifest+json".parse().expect("valid header"));
-    (headers, serde_json::to_string(&manifest).expect("valid json")).into_response()
-}
 
 async fn api_status(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     let pipelines = state.pipelines.read().await;
@@ -328,7 +254,7 @@ async fn get_or_create_pipeline(
         &state.hdhr_host,
         &state.hdhr_port,
         &state.bitrate,
-        fallback_art,
+        fallback_art.clone(),
         state.segment_duration,
     )
     .await?;
@@ -339,6 +265,7 @@ async fn get_or_create_pipeline(
             &station_id,
             pipeline.artwork_url.clone(),
             pipeline.track_info.clone(),
+            fallback_art,
         )
     });
 

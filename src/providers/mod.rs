@@ -11,5 +11,6 @@ pub trait MetadataProvider: Send + Sync + 'static {
         station_id: &str,
         artwork_target: Arc<RwLock<Option<String>>>,
         track_target: Arc<RwLock<(String, String)>>,
+        fallback_art_url: Option<String>,
     ) -> tokio::task::JoinHandle<()>;
 }
